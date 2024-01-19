@@ -3,7 +3,6 @@ from pathlib import Path
 from transformers import AutoModelForObjectDetection, TableTransformerForObjectDetection
 import torch
 from PIL import Image
-from huggingface_hub import hf_hub_download
 from torchvision import transforms
 import numpy as np
 import csv
