@@ -256,8 +256,14 @@ def apply_table_parsing(file_name: str):
 
 
 if __name__ == '__main__':
-    for file_name in ['0001', '0002', '0003', '0004', '0005', '0006', '0007', '0008', '0009', '0010']:
+    numbers = [f"{i:04d}" for i in range(1, 600)]
+    not_processed = []
+    for file_name in tqdm(numbers):
         try:
             apply_table_parsing(file_name=file_name)
         except IndexError as e:
-            print(f"Error for {file_name}: {e}")
+            not_processed.append(file_name)
+
+    with open('output/not_processed.txt', 'w') as f:
+        for item in not_processed:
+            f.write(f"{item}\n")
