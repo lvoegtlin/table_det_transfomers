@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from transformers import AutoModelForObjectDetection, TableTransformerForObjectDetection
 import torch
 from PIL import Image
@@ -8,7 +10,8 @@ import csv
 import easyocr
 from tqdm.auto import tqdm
 
-reader = easyocr.Reader(['en']) # this needs to run only once to load the model into memory
+reader = easyocr.Reader(['en'])  # this needs to run only once to load the model into memory
+
 
 class MaxResize(object):
     def __init__(self, max_size=800):
@@ -18,9 +21,10 @@ class MaxResize(object):
         width, height = image.size
         current_max_size = max(width, height)
         scale = self.max_size / current_max_size
-        resized_image = image.resize((int(round(scale*width)), int(round(scale*height))))
+        resized_image = image.resize((int(round(scale * width)), int(round(scale * height))))
 
         return resized_image
+
 
 # for output bounding box post-processing
 def box_cxcywh_to_xyxy(x):
@@ -34,7 +38,6 @@ def rescale_bboxes(out_bbox, size):
     b = box_cxcywh_to_xyxy(out_bbox)
     b = b * torch.tensor([img_w, img_h, img_w, img_h], dtype=torch.float32)
     return b
-
 
 
 def outputs_to_objects(outputs, img_size, id2label):
@@ -52,6 +55,7 @@ def outputs_to_objects(outputs, img_size, id2label):
 
     return objects
 
+
 def objects_to_crops(img, tokens, objects, class_thresholds, padding=10):
     """
     Process the bounding boxes produced by the table detection model into
@@ -66,25 +70,25 @@ def objects_to_crops(img, tokens, objects, class_thresholds, padding=10):
         cropped_table = {}
 
         bbox = obj['bbox']
-        bbox = [bbox[0]-padding, bbox[1]-padding, bbox[2]+padding, bbox[3]+padding]
+        bbox = [bbox[0] - padding, bbox[1] - padding, bbox[2] + padding, bbox[3] + padding]
 
         cropped_img = img.crop(bbox)
 
         table_tokens = [token for token in tokens if iob(token['bbox'], bbox) >= 0.5]
         for token in table_tokens:
-            token['bbox'] = [token['bbox'][0]-bbox[0],
-                            token['bbox'][1]-bbox[1],
-                            token['bbox'][2]-bbox[0],
-                            token['bbox'][3]-bbox[1]]
+            token['bbox'] = [token['bbox'][0] - bbox[0],
+                             token['bbox'][1] - bbox[1],
+                             token['bbox'][2] - bbox[0],
+                             token['bbox'][3] - bbox[1]]
 
         # If table is predicted to be rotated, rotate cropped image and tokens/words:
         if obj['label'] == 'table rotated':
             cropped_img = cropped_img.rotate(270, expand=True)
             for token in table_tokens:
                 bbox = token['bbox']
-                bbox = [cropped_img.size[0]-bbox[3]-1,
+                bbox = [cropped_img.size[0] - bbox[3] - 1,
                         bbox[0],
-                        cropped_img.size[0]-bbox[1]-1,
+                        cropped_img.size[0] - bbox[1] - 1,
                         bbox[2]]
                 token['bbox'] = bbox
 
@@ -96,19 +100,18 @@ def objects_to_crops(img, tokens, objects, class_thresholds, padding=10):
     return table_crops
 
 
-def get_cropped_table(model, file_path, crop_padding):
+def get_cropped_table(model, file_path, crop_padding, device, path):
     image = Image.open(file_path).convert("RGB")
 
-
     detection_transform = transforms.Compose([
-                MaxResize(800),
-                transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-            ])
+        MaxResize(800),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
     pixel_values = detection_transform(image).unsqueeze(0)
-    pixel_values.to(device)
+    pixel_values = pixel_values.to(device)
 
-    #forward pass
+    # forward pass
     with torch.no_grad():
         outputs = model(pixel_values)
 
@@ -120,28 +123,28 @@ def get_cropped_table(model, file_path, crop_padding):
 
     tokens = []
     detection_class_thresholds = {
-                                "table": 0.5,
-                                "table rotated": 0.5,
-                                "no object": 10
-                                }
+        "table": 0.5,
+        "table rotated": 0.5,
+        "no object": 10
+    }
 
-    tables_crops = objects_to_crops(image, tokens, objects, detection_class_thresholds, padding=0)
+    tables_crops = objects_to_crops(image, tokens, objects, detection_class_thresholds, padding=crop_padding)
     cropped_table = tables_crops[0]['image'].convert("RGB")
 
     # save table img
     # TODO make the name variable
-    cropped_table.save("table_test_img.jpg")
+    cropped_table.save(str(path) + ".jpg")
 
     return cropped_table
 
 
-def get_cells(table_img, model):
+def get_cells(device, cropped_table, structure_model):
     structure_transform = transforms.Compose([
         MaxResize(1000),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
-    
+
     pixel_values = structure_transform(cropped_table).unsqueeze(0)
     pixel_values = pixel_values.to(device)
 
@@ -189,7 +192,7 @@ def get_cell_coordinates_by_row(table_data):
     return cell_coordinates
 
 
-def apply_ocr(cell_coordinates):
+def apply_ocr(cell_coordinates, cropped_table):
     # let's OCR row by row
     data = dict()
     max_num_columns = 0
@@ -220,35 +223,42 @@ def apply_ocr(cell_coordinates):
     return data
 
 
-def write_csv(data):
+def write_csv(data, path):
     import csv
 
-    with open('output.csv','w') as result_file:
+    with open(str(path) + '.csv', 'w') as result_file:
         wr = csv.writer(result_file, dialect='excel')
 
         for row, row_text in data.items():
             wr.writerow(row_text)
 
 
-if __name__ == '__main__':
+def apply_table_parsing(file_name: str):
     model = AutoModelForObjectDetection.from_pretrained("microsoft/table-transformer-detection", revision="no_timm")
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
     # let's load an example imag
-    file_path = hf_hub_download(repo_id="nielsr/example-pdf", repo_type="dataset", filename="image.png")
+    file_path = Path(f"/HOME/voegtlil/datasets/nutrition_labels/non-crop/food_label/{file_name}.jpg")
+    output_path = Path('output') / file_name
+    output_path.parent.mkdir(exist_ok=True)
 
-    cropped_table = get_cropped_table(model, file_path, 10)
-
-    structure_model = TableTransformerForObjectDetection.from_pretrained("microsoft/table-structure-recognition-v1.1-all")
+    cropped_table = get_cropped_table(model, file_path, 10, device, path=output_path)
+    structure_model = TableTransformerForObjectDetection.from_pretrained(
+        "microsoft/table-structure-recognition-v1.1-all")
     structure_model.to(device)
 
-    cells = get_cells(cropped_table, structure_model)
-
+    cells = get_cells(device, cropped_table, structure_model)
     cell_coordinates = get_cell_coordinates_by_row(cells)
 
-    data = apply_ocr(cell_coordinates)
+    data = apply_ocr(cell_coordinates, cropped_table)
 
-    write_csv(data)
+    write_csv(data, output_path)
 
+
+if __name__ == '__main__':
+    for file_name in ['0001', '0002', '0003', '0004', '0005', '0006', '0007', '0008', '0009', '0010']:
+        try:
+            apply_table_parsing(file_name=file_name)
+        except IndexError as e:
+            print(f"Error for {file_name}: {e}")
