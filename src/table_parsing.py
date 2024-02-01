@@ -9,6 +9,8 @@ import csv
 import easyocr
 from tqdm.auto import tqdm
 
+from util import iob, visualize_detected_tables
+
 reader = easyocr.Reader(['en'])  # this needs to run only once to load the model into memory
 
 
@@ -130,8 +132,10 @@ def get_cropped_table(model, file_path, crop_padding, device, path):
     tables_crops = objects_to_crops(image, tokens, objects, detection_class_thresholds, padding=crop_padding)
     cropped_table = tables_crops[0]['image'].convert("RGB")
 
+    # fig = visualize_detected_tables(image, objects)
+    # fig.savefig(str(path) + "_detected_tables.jpg")
+
     # save table img
-    # TODO make the name variable
     cropped_table.save(str(path) + ".jpg")
 
     return cropped_table
@@ -232,15 +236,15 @@ def write_csv(data, path):
             wr.writerow(row_text)
 
 
-def apply_table_parsing(file_name: str):
+def apply_table_parsing(file_name: str, image_type: str, output_folder_name: str):
     model = AutoModelForObjectDetection.from_pretrained("microsoft/table-transformer-detection", revision="no_timm")
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
     # let's load an example imag
-    file_path = Path(f"/HOME/voegtlil/datasets/nutrition_labels/non-crop/food_label/{file_name}.jpg")
-    output_path = Path('output') / file_name
-    output_path.parent.mkdir(exist_ok=True)
+    file_path = Path(f"/HOME/voegtlil/datasets/nutrition_labels/{image_type}/img/{file_name}.jpg")
+    output_path = Path('outputs') / output_folder_name / file_name
+    output_path.parent.mkdir(exist_ok=True, parents=True)
 
     cropped_table = get_cropped_table(model, file_path, 10, device, path=output_path)
     structure_model = TableTransformerForObjectDetection.from_pretrained(
@@ -256,14 +260,18 @@ def apply_table_parsing(file_name: str):
 
 
 if __name__ == '__main__':
-    numbers = [f"{i:04d}" for i in range(1, 600)]
+    range_start = 1  # 1
+    range_end = 601  # 600
+    image_type = 'full_size'  # 'crop_small' or 'crop_large' or 'full_size'
+    output_folder_name = 'full_size'
+    numbers = [f"{i:04d}" for i in range(range_start, range_end)]
     not_processed = []
     for file_name in tqdm(numbers):
         try:
-            apply_table_parsing(file_name=file_name)
+            apply_table_parsing(file_name=file_name, image_type=image_type, output_folder_name=output_folder_name)
         except IndexError as e:
             not_processed.append(file_name)
 
-    with open('output/not_processed.txt', 'w') as f:
+    with open('outputs/not_processed.txt', 'w') as f:
         for item in not_processed:
             f.write(f"{item}\n")
